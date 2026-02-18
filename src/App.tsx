@@ -1,379 +1,496 @@
-import { useState, useEffect } from 'react';
-import { Plus, Trash2, Calculator, BookOpen, GraduationCap, TrendingUp, Search, Info } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, Trash2, Edit2, GraduationCap, Layout, BookOpen, Calculator, ChevronRight, ChevronDown, BarChart3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
+import { Semester, Class, Module } from './types';
+import { calculateModuleAverage, calculateClassStats, calculateSemesterStats, formatGrade } from './lib/calculations';
 
-// Types
-interface Module {
-  id: string;
-  name: string;
-  assignmentGrade: number | '';
-  examGrade: number | '';
-  coefficient: number;
-}
+// --- Components ---
 
-// Helper to calculate module average
-const calculateModuleAverage = (module: Module): number | null => {
-  if (module.assignmentGrade === '' || module.examGrade === '') return null;
-  return (Number(module.assignmentGrade) * 0.6) + (Number(module.examGrade) * 0.4);
-};
+const StatCard = ({ title, value, subtitle, icon: Icon, color }: { title: string, value: string, subtitle: string, icon: any, color: string }) => (
+  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-start justify-between">
+    <div>
+      <p className="text-slate-500 text-sm font-medium">{title}</p>
+      <h3 className="text-2xl font-bold mt-1 text-slate-900">{value}</h3>
+      <p className="text-xs text-slate-400 mt-1">{subtitle}</p>
+    </div>
+    <div className={`p-3 rounded-xl ${color}`}>
+      <Icon size={20} className="text-white" />
+    </div>
+  </div>
+);
+
+const EmptyState = ({ message }: { message: string }) => (
+  <div className="flex flex-col items-center justify-center p-12 text-center bg-slate-50/50 rounded-3xl border-2 border-dashed border-slate-200">
+    <div className="bg-white p-4 rounded-full shadow-sm mb-4">
+      <BookOpen size={32} className="text-slate-300" />
+    </div>
+    <p className="text-slate-500 font-medium">{message}</p>
+  </div>
+);
+
+// --- Main App ---
 
 export default function App() {
-  const [modules, setModules] = useState<Module[]>(() => {
-    const saved = localStorage.getItem('grade-tracker-modules');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isAdding, setIsAdding] = useState(false);
+  const [semesters, setSemesters] = useState<Semester[]>([]);
+  const [activeSemesterId, setActiveSemesterId] = useState<string | null>(null);
+  const [isAddingSemester, setIsAddingSemester] = useState(false);
+  const [newSemesterName, setNewSemesterName] = useState('');
+
+  // Local state for modals
+  const [isAddingClass, setIsAddingClass] = useState(false);
+  const [newClassName, setNewClassName] = useState('');
+  const [targetSemesterId, setTargetSemesterId] = useState('');
+
+  const [isAddingModule, setIsAddingModule] = useState(false);
   const [newModuleName, setNewModuleName] = useState('');
+  const [targetClassId, setTargetClassId] = useState('');
 
-  useEffect(() => {
-    localStorage.setItem('grade-tracker-modules', JSON.stringify(modules));
-  }, [modules]);
-
-  const addModule = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newModuleName.trim()) return;
-    
-    const newModule: Module = {
+  // Actions
+  const addSemester = () => {
+    if (!newSemesterName.trim()) return;
+    const newSem: Semester = {
       id: crypto.randomUUID(),
-      name: newModuleName,
-      assignmentGrade: '',
-      examGrade: '',
-      coefficient: 1,
+      name: newSemesterName,
+      classes: []
     };
-    
-    setModules([...modules, newModule]);
-    setNewModuleName('');
-    setIsAdding(false);
-    toast.success('Module ajouté avec succès');
+    setSemesters([...semesters, newSem]);
+    setNewSemesterName('');
+    setIsAddingSemester(false);
+    if (!activeSemesterId) setActiveSemesterId(newSem.id);
+    toast.success('Semestre ajouté avec succès');
   };
 
-  const deleteModule = (id: string) => {
-    setModules(modules.filter(m => m.id !== id));
-    toast.error('Module supprimé');
-  };
-
-  const updateGrade = (id: string, field: 'assignmentGrade' | 'examGrade' | 'coefficient', value: string) => {
-    setModules(modules.map(m => {
-      if (m.id === id) {
-        if (field === 'coefficient') {
-          return { ...m, [field]: value === '' ? 1 : Number(value) };
-        }
-        const numVal = value === '' ? '' : Math.min(20, Math.max(0, Number(value)));
-        return { ...m, [field]: numVal };
+  const addClass = (semesterId: string) => {
+    if (!newClassName.trim()) return;
+    setSemesters(semesters.map(s => {
+      if (s.id === semesterId) {
+        return {
+          ...s,
+          classes: [...s.classes, {
+            id: crypto.randomUUID(),
+            semesterId: s.id,
+            name: newClassName,
+            modules: []
+          }]
+        };
       }
-      return m;
+      return s;
     }));
+    setNewClassName('');
+    setIsAddingClass(false);
+    toast.success('Classe ajoutée');
   };
 
-  const filteredModules = modules.filter(m => 
-    m.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const calculateGeneralAverage = () => {
-    const modulesWithGrades = modules.filter(m => m.assignmentGrade !== '' && m.examGrade !== '');
-    if (modulesWithGrades.length === 0) return 0;
-    
-    const totalWeightedSum = modulesWithGrades.reduce((sum, m) => {
-      const avg = calculateModuleAverage(m) || 0;
-      return sum + (avg * m.coefficient);
-    }, 0);
-    
-    const totalCoeff = modulesWithGrades.reduce((sum, m) => sum + m.coefficient, 0);
-    return totalCoeff > 0 ? totalWeightedSum / totalCoeff : 0;
+  const addModule = (classId: string) => {
+    if (!newModuleName.trim()) return;
+    setSemesters(semesters.map(s => ({
+      ...s,
+      classes: s.classes.map(c => {
+        if (c.id === classId) {
+          return {
+            ...c,
+            modules: [...c.modules, {
+              id: crypto.randomUUID(),
+              classId: c.id,
+              name: newModuleName,
+              assignmentGrade: null,
+              examGrade: null
+            }]
+          };
+        }
+        return c;
+      })
+    })));
+    setNewModuleName('');
+    setIsAddingModule(false);
+    toast.success('Module ajouté');
   };
 
-  const generalAverage = calculateGeneralAverage();
+  const updateGrades = (classId: string, moduleId: string, assignment: number | null, exam: number | null) => {
+    setSemesters(semesters.map(s => ({
+      ...s,
+      classes: s.classes.map(c => {
+        if (c.id === classId) {
+          return {
+            ...c,
+            modules: c.modules.map(m => {
+              if (m.id === moduleId) {
+                return { ...m, assignmentGrade: assignment, examGrade: exam };
+              }
+              return m;
+            })
+          };
+        }
+        return c;
+      })
+    })));
+  };
+
+  const deleteModule = (classId: string, moduleId: string) => {
+    setSemesters(semesters.map(s => ({
+      ...s,
+      classes: s.classes.map(c => {
+        if (c.id === classId) {
+          return {
+            ...c,
+            modules: c.modules.filter(m => m.id !== moduleId)
+          };
+        }
+        return c;
+      })
+    })));
+    toast.info('Module supprimé');
+  };
+
+  const activeSemester = semesters.find(s => s.id === activeSemesterId);
+  const stats = activeSemester ? calculateSemesterStats(activeSemester.classes) : { average: 0, totalModules: 0, completedModules: 0 };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-blue-100">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans selection:bg-indigo-100">
       <Toaster position="top-right" richColors />
       
-      {/* Sidebar/Header */}
-      <header className="sticky top-0 z-30 w-full bg-white/80 backdrop-blur-md border-b border-slate-200 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-xl shadow-lg shadow-blue-200">
-              <GraduationCap className="text-white w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-800">Gestionnaire de Notes</h1>
-              <p className="text-xs text-slate-500 font-medium">Session Académique 2024-2025</p>
-            </div>
+      {/* Sidebar - Navigation par Semestre */}
+      <div className="fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-slate-200 hidden lg:flex flex-col p-6">
+        <div className="flex items-center gap-3 mb-10 px-2">
+          <div className="bg-indigo-600 p-2 rounded-xl">
+            <GraduationCap className="text-white" size={24} />
           </div>
-          
-          <div className="flex items-center gap-3">
-            <div className="relative group">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-              <input 
-                type="text" 
-                placeholder="Rechercher un module..."
-                className="pl-10 pr-4 py-2 bg-slate-100 border-none rounded-full text-sm focus:ring-2 focus:ring-blue-500 outline-none w-full md:w-64 transition-all"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <button 
-              onClick={() => setIsAdding(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2 transition-all shadow-md active:scale-95"
+          <h1 className="text-xl font-bold tracking-tight">GradeMaster</h1>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider px-2 mb-4">Mes Semestres</p>
+          {semesters.map(sem => (
+            <button
+              key={sem.id}
+              onClick={() => setActiveSemesterId(sem.id)}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${
+                activeSemesterId === sem.id 
+                ? 'bg-indigo-50 text-indigo-700 font-semibold border-indigo-100 shadow-sm' 
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
             >
-              <Plus className="w-4 h-4" />
-              <span>Nouveau Module</span>
+              <div className="flex items-center gap-3">
+                <Layout size={18} />
+                <span>{sem.name}</span>
+              </div>
+              {activeSemesterId === sem.id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
             </button>
+          ))}
+          
+          <button 
+            onClick={() => setIsAddingSemester(true)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-indigo-600 font-medium hover:bg-indigo-50 rounded-xl transition-all mt-4"
+          >
+            <Plus size={18} />
+            <span>Nouveau Semestre</span>
+          </button>
+        </div>
+
+        <div className="mt-auto p-4 bg-slate-50 rounded-2xl border border-slate-100">
+          <p className="text-xs text-slate-500 mb-2">Utilisation de MySQL</p>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-xs font-medium text-slate-700">Connecté à MySQL</span>
           </div>
         </div>
-      </header>
+      </div>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* Top Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm"
-          >
-            <div className="flex justify-between items-start mb-4">
-              <div className="bg-blue-50 p-3 rounded-2xl text-blue-600">
-                <Calculator className="w-6 h-6" />
-              </div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Moyenne Générale</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <h2 className={`text-4xl font-black ${generalAverage >= 10 ? 'text-blue-600' : 'text-rose-500'}`}>
-                {generalAverage.toFixed(2)}
+      {/* Main Content */}
+      <main className="lg:ml-72 p-6 lg:p-10 pb-24">
+        {/* Header Section */}
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+            <div>
+              <h2 className="text-3xl font-bold text-slate-900">
+                {activeSemester ? activeSemester.name : 'Bienvenue'}
               </h2>
-              <span className="text-slate-400 font-medium">/ 20</span>
+              <p className="text-slate-500 mt-1">Gérez vos notes et suivez votre progression académique.</p>
             </div>
-            <div className="mt-4 flex items-center gap-2">
-              <div className="h-2 flex-1 bg-slate-100 rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }}
-                  animate={{ width: `${(generalAverage / 20) * 100}%` }}
-                  className={`h-full rounded-full ${generalAverage >= 10 ? 'bg-blue-500' : 'bg-rose-500'}`}
+            
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-slate-500 text-sm mr-2">Calcul:</span>
+                <span className="text-slate-900 font-semibold text-sm">60% CC / 40% Examen</span>
+              </div>
+            </div>
+          </div>
+
+          {!activeSemester ? (
+            <div className="max-w-2xl mx-auto mt-20">
+              <EmptyState message="Veuillez créer ou sélectionner un semestre pour commencer." />
+              <button 
+                onClick={() => setIsAddingSemester(true)}
+                className="mx-auto mt-8 flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-semibold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95"
+              >
+                <Plus size={20} />
+                Créer mon premier semestre
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-10">
+              {/* Stats Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <StatCard 
+                  title="Moyenne Générale" 
+                  value={`${formatGrade(stats.average)}/20`}
+                  subtitle="Moyenne pondérée du semestre"
+                  icon={Calculator}
+                  color="bg-indigo-500"
+                />
+                <StatCard 
+                  title="Progression" 
+                  value={`${stats.completedModules}/${stats.totalModules}`}
+                  subtitle="Modules avec notes complètes"
+                  icon={BarChart3}
+                  color="bg-emerald-500"
+                />
+                <StatCard 
+                  title="Status" 
+                  value={stats.average >= 10 ? 'Admis' : stats.average > 0 ? 'Ajourné' : '--'}
+                  subtitle="Basé sur la moyenne actuelle"
+                  icon={GraduationCap}
+                  color={stats.average >= 10 ? 'bg-amber-500' : 'bg-rose-500'}
                 />
               </div>
-            </div>
-          </motion.div>
 
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm"
-          >
-            <div className="flex justify-between items-start mb-4">
-              <div className="bg-emerald-50 p-3 rounded-2xl text-emerald-600">
-                <BookOpen className="w-6 h-6" />
-              </div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Modules Inscrits</span>
-            </div>
-            <h2 className="text-4xl font-black text-slate-800">{modules.length}</h2>
-            <p className="text-sm text-slate-500 mt-2">
-              {modules.filter(m => m.assignmentGrade !== '' && m.examGrade !== '').length} modules complétés
-            </p>
-          </motion.div>
+              {/* Classes & Modules Section */}
+              <div className="space-y-8">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <BookOpen size={20} className="text-indigo-600" />
+                    Classes & Matières
+                  </h3>
+                  <button 
+                    onClick={() => {
+                      setTargetSemesterId(activeSemester.id);
+                      setIsAddingClass(true);
+                    }}
+                    className="flex items-center gap-2 text-sm font-semibold bg-white border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
+                  >
+                    <Plus size={16} />
+                    Ajouter une classe
+                  </button>
+                </div>
 
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm relative overflow-hidden"
-          >
-            <div className="relative z-10">
-              <div className="flex justify-between items-start mb-4">
-                <div className="bg-amber-50 p-3 rounded-2xl text-amber-600">
-                  <TrendingUp className="w-6 h-6" />
-                </div>
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Répartition</span>
-              </div>
-              <div className="flex gap-4">
-                <div>
-                  <p className="text-xs font-bold text-slate-400">Devoir</p>
-                  <p className="text-lg font-bold text-slate-800">60%</p>
-                </div>
-                <div className="w-px h-10 bg-slate-200"></div>
-                <div>
-                  <p className="text-xs font-bold text-slate-400">Examen</p>
-                  <p className="text-lg font-bold text-slate-800">40%</p>
-                </div>
-              </div>
-            </div>
-            <img 
-              src="https://storage.googleapis.com/dala-prod-public-storage/generated-images/4ff3ec14-3ffb-409e-8cfb-cff3a5ed08ee/dashboard-illustration-dddcf561-1771446267357.webp" 
-              alt="Decorative" 
-              className="absolute -right-4 -bottom-4 w-24 h-24 object-cover opacity-20 rotate-12"
-            />
-          </motion.div>
-        </div>
+                {activeSemester.classes.length === 0 ? (
+                  <EmptyState message="Aucune classe ajoutée pour ce semestre." />
+                ) : (
+                  <div className="grid grid-cols-1 gap-8">
+                    {activeSemester.classes.map(cls => {
+                      const classStats = calculateClassStats(cls.modules);
+                      return (
+                        <div key={cls.id} className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                          {/* Class Header */}
+                          <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50">
+                            <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center border border-slate-200 shadow-sm">
+                                <Layout className="text-indigo-600" size={24} />
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-lg text-slate-900">{cls.name}</h4>
+                                <p className="text-sm text-slate-500">{cls.modules.length} Module(s)</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <div className="text-right">
+                                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Moyenne Classe</p>
+                                <p className="text-xl font-bold text-indigo-600">{formatGrade(classStats.average)}/20</p>
+                              </div>
+                              <button 
+                                onClick={() => {
+                                  setTargetClassId(cls.id);
+                                  setIsAddingModule(true);
+                                }}
+                                className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 transition-colors"
+                              >
+                                <Plus size={20} />
+                              </button>
+                            </div>
+                          </div>
 
-        {/* Modules Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <AnimatePresence mode="popLayout">
-            {filteredModules.map((module) => {
-              const moduleAvg = calculateModuleAverage(module);
-              return (
-                <motion.div
-                  layout
-                  key={module.id}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow group"
-                >
-                  <div className="p-5 border-b border-slate-100 flex justify-between items-start">
-                    <div>
-                      <h3 className="font-bold text-slate-800 text-lg group-hover:text-blue-600 transition-colors">{module.name}</h3>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full uppercase">
-                          Coeff: {module.coefficient}
-                        </span>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => deleteModule(module.id)}
-                      className="text-slate-300 hover:text-rose-500 p-1 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                          {/* Modules List */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                              <thead>
+                                <tr className="text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                                  <th className="px-8 py-4 font-semibold">Module / Matière</th>
+                                  <th className="px-6 py-4 font-semibold">Note CC (60%)</th>
+                                  <th className="px-6 py-4 font-semibold">Examen (40%)</th>
+                                  <th className="px-6 py-4 font-semibold">Moyenne</th>
+                                  <th className="px-8 py-4 font-semibold text-right">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-50">
+                                {cls.modules.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={5} className="px-8 py-8 text-center text-slate-400 italic">
+                                      Aucun module dans cette classe.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  cls.modules.map(mod => {
+                                    const avg = calculateModuleAverage(mod);
+                                    return (
+                                      <tr key={mod.id} className="group hover:bg-slate-50/50 transition-colors">
+                                        <td className="px-8 py-4 font-medium text-slate-700">{mod.name}</td>
+                                        <td className="px-6 py-4">
+                                          <input 
+                                            type="number" 
+                                            placeholder="--/20"
+                                            value={mod.assignmentGrade ?? ''}
+                                            onChange={(e) => updateGrades(cls.id, mod.id, e.target.value === '' ? null : parseFloat(e.target.value), mod.examGrade)}
+                                            className="w-20 bg-transparent border-none focus:ring-2 focus:ring-indigo-500 rounded px-2 py-1 text-slate-700 font-medium"
+                                          />
+                                        </td>
+                                        <td className="px-6 py-4">
+                                          <input 
+                                            type="number" 
+                                            placeholder="--/20"
+                                            value={mod.examGrade ?? ''}
+                                            onChange={(e) => updateGrades(cls.id, mod.id, mod.assignmentGrade, e.target.value === '' ? null : parseFloat(e.target.value))}
+                                            className="w-20 bg-transparent border-none focus:ring-2 focus:ring-indigo-500 rounded px-2 py-1 text-slate-700 font-medium"
+                                          />
+                                        </td>
+                                        <td className="px-6 py-4">
+                                          <span className={`font-bold ${avg !== null && avg < 10 ? 'text-rose-500' : 'text-slate-900'}`}>
+                                            {formatGrade(avg)}
+                                          </span>
+                                        </td>
+                                        <td className="px-8 py-4 text-right">
+                                          <button 
+                                            onClick={() => deleteModule(cls.id, mod.id)}
+                                            className="text-slate-300 hover:text-rose-500 transition-colors"
+                                          >
+                                            <Trash2 size={18} />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  
-                  <div className="p-6 space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Devoir (60%)</label>
-                        <input 
-                          type="number" 
-                          min="0"
-                          max="20"
-                          step="0.25"
-                          placeholder="0.00"
-                          className="w-full bg-slate-50 border-none rounded-xl py-2 px-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all font-semibold"
-                          value={module.assignmentGrade}
-                          onChange={(e) => updateGrade(module.id, 'assignmentGrade', e.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Examen (40%)</label>
-                        <input 
-                          type="number" 
-                          min="0"
-                          max="20"
-                          step="0.25"
-                          placeholder="0.00"
-                          className="w-full bg-slate-50 border-none rounded-xl py-2 px-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all font-semibold"
-                          value={module.examGrade}
-                          onChange={(e) => updateGrade(module.id, 'examGrade', e.target.value)}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-2">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-sm font-semibold text-slate-500">Moyenne Module</span>
-                        <span className={`text-lg font-black ${moduleAvg !== null ? (moduleAvg >= 10 ? 'text-blue-600' : 'text-rose-500') : 'text-slate-300'}`}>
-                          {moduleAvg !== null ? moduleAvg.toFixed(2) : '--.--'}
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${moduleAvg ? (moduleAvg / 20) * 100 : 0}%` }}
-                          className={`h-full ${moduleAvg && moduleAvg >= 10 ? 'bg-blue-500' : 'bg-rose-400'}`}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
-
-          {modules.length === 0 && !isAdding && (
-            <div className="col-span-full py-20 flex flex-col items-center justify-center text-slate-400">
-              <div className="bg-white p-6 rounded-full mb-4 shadow-sm border border-slate-100">
-                <BookOpen className="w-12 h-12 text-slate-200" />
+                )}
               </div>
-              <p className="text-lg font-medium">Aucun module pour le moment</p>
-              <button 
-                onClick={() => setIsAdding(true)}
-                className="mt-4 text-blue-600 font-bold hover:underline"
-              >
-                Commencer par ajouter votre premier module
-              </button>
             </div>
           )}
         </div>
       </main>
 
-      {/* Add Module Modal */}
+      {/* Modals - Simplified using Overlay */}
       <AnimatePresence>
-        {isAdding && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        {isAddingSemester && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
             <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAdding(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-[32px] p-8 shadow-2xl"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
             >
-              <h2 className="text-2xl font-bold text-slate-800 mb-2">Ajouter un module</h2>
-              <p className="text-slate-500 mb-6 text-sm">Entrez le nom du module pour commencer à suivre vos notes.</p>
-              
-              <form onSubmit={addModule} className="space-y-6">
-                <div>
-                  <label className="text-xs font-bold text-slate-400 uppercase mb-2 block ml-1">Nom du module</label>
-                  <input 
-                    autoFocus
-                    type="text" 
-                    placeholder="ex: Mathématiques, Économie..."
-                    className="w-full bg-slate-100 border-none rounded-2xl py-3 px-4 text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium"
-                    value={newModuleName}
-                    onChange={(e) => setNewModuleName(e.target.value)}
-                  />
-                </div>
-                
-                <div className="flex gap-3">
-                  <button 
-                    type="button"
-                    onClick={() => setIsAdding(false)}
-                    className="flex-1 px-6 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-colors"
-                  >
-                    Annuler
-                  </button>
-                  <button 
-                    type="submit"
-                    className="flex-[2] bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-blue-100 transition-all active:scale-95"
-                  >
-                    Ajouter le module
-                  </button>
-                </div>
-              </form>
+              <h3 className="text-xl font-bold mb-4">Nouveau Semestre</h3>
+              <input 
+                type="text" 
+                placeholder="Ex: Semestre 1, Printemps 2024..."
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none mb-6"
+                value={newSemesterName}
+                onChange={(e) => setNewSemesterName(e.target.value)}
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsAddingSemester(false)}
+                  className="flex-1 px-4 py-3 rounded-xl border border-slate-200 font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button 
+                  onClick={addSemester}
+                  className="flex-1 px-4 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors"
+                >
+                  Créer
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isAddingClass && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
+            >
+              <h3 className="text-xl font-bold mb-4">Ajouter une Classe</h3>
+              <input 
+                type="text" 
+                placeholder="Ex: Mathématiques, Marketing, Informatique..."
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none mb-6"
+                value={newClassName}
+                onChange={(e) => setNewClassName(e.target.value)}
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsAddingClass(false)}
+                  className="flex-1 px-4 py-3 rounded-xl border border-slate-200 font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button 
+                  onClick={() => addClass(targetSemesterId)}
+                  className="flex-1 px-4 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors"
+                >
+                  Ajouter
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isAddingModule && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6"
+            >
+              <h3 className="text-xl font-bold mb-4">Nouveau Module</h3>
+              <input 
+                type="text" 
+                placeholder="Nom de la matière..."
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none mb-6"
+                value={newModuleName}
+                onChange={(e) => setNewModuleName(e.target.value)}
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsAddingModule(false)}
+                  className="flex-1 px-4 py-3 rounded-xl border border-slate-200 font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button 
+                  onClick={() => addModule(targetClassId)}
+                  className="flex-1 px-4 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors"
+                >
+                  Confirmer
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
-
-      <footer className="mt-20 border-t border-slate-200 bg-white py-10 px-6">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2 opacity-50">
-            <GraduationCap className="w-5 h-5" />
-            <span className="text-sm font-bold">GradeTracker Pro</span>
-          </div>
-          <div className="flex items-center gap-6">
-             <div className="flex items-center gap-2 text-xs text-slate-400">
-               <Info className="w-3 h-3" />
-               <span>Calcul: (Devoir × 0.6) + (Examen × 0.4)</span>
-             </div>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }
